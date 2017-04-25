@@ -196,27 +196,28 @@ def init(*args, **kwargs):
 
 class AbstractClusterScheduler(object):
     __metaclass__ = ABCMeta
-    
+
     def __init__(self, options):
         self.options = options
-    
+
     @abstractmethod
     def submit_command(self, output_file):
         pass
 
-    @abstractmethod    
+    @abstractmethod
     def output_regexp(self):
         pass
 
 
     def submit(self, job_id, experiment_name, experiment_dir, database_address):
         base_path = os.path.dirname(os.path.realpath(spearmint.__file__))
-        run_command = '#!/bin/bash\n'
+        run_command = ' '
+        #run_command = '#!/bin/bash\n'
         if "environment-file" in self.options:
             run_command += 'source %s\n' % self.options["environment-file"]
-        run_command += 'cd %s\n' % base_path
-        run_command += 'python launcher.py --database-address=%s --experiment-name=%s --job-id=%s %s' % \
-               (database_address, experiment_name, job_id, experiment_dir)
+        #run_command += 'cd %s\n' % base_path
+        run_command += base_path+ '/slurm_wrapper.sh --database-address=%s --experiment-name=%s --job-id=%s %s' % \
+                (database_address, experiment_name, job_id, experiment_dir)
 
         # Since "localhost" might mean something different on the machine
         # we are submitting to, set it to the actual name of the parent machine
@@ -241,12 +242,11 @@ class AbstractClusterScheduler(object):
             submit_command += ' ' + self.options['scheduler-args']
         # submit_command = shlex.split(submit_command)
 
-        process = subprocess.Popen(submit_command, 
-                                stdin=subprocess.PIPE,
-                                stdout=subprocess.PIPE,
-                                stderr=subprocess.STDOUT, 
-                                shell=True)
-        output, std_err = process.communicate(input=run_command)
+        print submit_command+run_command
+
+        process = subprocess.Popen(submit_command + " " + run_command, stdin=subprocess.PIPE, stdout=subprocess.PIPE, bufsize=1,shell=True)
+
+        output, std_err = process.communicate(input="")
         process.stdin.close()
 
         # Parse out the process id from text
@@ -259,56 +259,9 @@ class AbstractClusterScheduler(object):
 
 
     def alive(self, process_id):
-        # This wastes a bit of time, but prevents
-        # objects than inherit and don't use DRMAA from
-        # having a dependency on this library
-        # I am sure there is a way to get the best of both
-        # worlds but this is the cleanest
-        import drmaa
-
-        s = drmaa.Session()
-        s.initialize()
-
-        try:
-            status = s.jobStatus(str(process_id))
-        except:
-            # job not found
-            sys.stderr.write("EXC: %s\n" % str(sys.exc_info()[0]))
-            sys.stderr.write("Could not find job for rocess id %d\n" % process_id)
-            try:
-                s.exit()
-            except:
-                pass
-            return False
-
-        if status in [drmaa.JobState.QUEUED_ACTIVE, drmaa.JobState.RUNNING]:
-            alive = True
-
-        elif status == drmaa.JobState.DONE:
-            sys.stderr.write("Process %d complete but not yet updated.\n" % process_id)
-            alive = True
-
-        elif status == drmaa.JobState.UNDETERMINED:
-            sys.stderr.write("Process %d in undetermined state.\n" % process_id)
-            alive = False
-
-        elif status in [drmaa.JobState.SYSTEM_ON_HOLD,
-                        drmaa.JobState.USER_ON_HOLD,
-                        drmaa.JobState.USER_SYSTEM_ON_HOLD,
-                        drmaa.JobState.SYSTEM_SUSPENDED,
-                        drmaa.JobState.USER_SUSPENDED]:
-            sys.stderr.write("Process is held or suspended.\n" % process_id)
-            alive = False
-
-        elif status == drmaa.JobState.FAILED:
-            sys.stderr.write("Process %d failed.\n" % process_id)
-            alive = False
-
-        # try to close session
-        try:
-            s.exit()
-        except:
-            pass
-
-        return alive
+        with open(os.devnull, 'wb') as DEVNULL:
+            try: subprocess.check_call(['squeue', '-j', str(process_id)], stdout=DEVNULL, stderr=DEVNULL)
+            except subprocess.CalledProcessError: return False
+        print process_id
+        return True
 
